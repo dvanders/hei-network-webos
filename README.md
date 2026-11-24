@@ -7,6 +7,8 @@ HEI Network has apps for Apple TV, Android TV and Fire TV, but not for LG; this 
 HEI Network. You need your own HEI Network account, and the app only plays what that account can
 already watch.
 
+![Home screen of the app: featured episode, navigation tabs and a row of Season 17 episodes](docs/screenshot.jpg)
+
 ## What it does
 
 - Home screen with the featured episode, latest seasons and a "Continue watching" row
