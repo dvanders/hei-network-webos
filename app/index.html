@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HEI Network</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="stack"></div>
+<div id="player" hidden>
+  <video id="video" playsinline></video>
+  <div id="spinner" class="spinner" hidden></div>
+  <div id="osd">
+    <div class="osd-top"><div id="p-eyebrow" class="eyebrow"></div><div id="p-title" class="p-title"></div></div>
+    <div class="osd-bottom">
+      <div id="p-state" class="p-state"></div>
+      <div class="bar"><div id="p-buf" class="buf"></div><div id="p-pos" class="pos"></div></div>
+      <div class="times"><span id="p-cur">0:00</span><span id="p-hint">OK play/pause · ◀ ▶ seek · BACK exit</span><span id="p-dur">0:00</span></div>
+    </div>
+  </div>
+  <div id="upnext" hidden></div>
+</div>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
