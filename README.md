@@ -65,7 +65,7 @@ site changes.
 
 ## Status
 
-Tested on an LG OLED C2 and an OLED C5. Version 0.3.2 fixes the layout on 2020 models (webOS 5), which is reported but not yet confirmed. Other models are untested.
+Tested on an LG OLED C2 and an OLED C5. A user has confirmed it works on a 2020 OLED (webOS 5) from version 0.3.2 on. Other models are untested.
 
 ## Licence
 
