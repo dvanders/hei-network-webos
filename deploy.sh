@@ -8,6 +8,6 @@ cd "$(dirname "$0")"
 DEVICE="${DEVICE:-c2}"
 [ -d ../tools/node_modules/.bin ] && PATH="$(cd ../tools/node_modules/.bin && pwd):$PATH"
 V=$(node -p "require('./app/appinfo.json').version")
-ares-package --no-minify -o build app | tail -1
-ares-install -d "$DEVICE" "build/com.dvanders.heinetwork_${V}_all.ipk" | tail -1
-[ "$1" = "--no-launch" ] || ares-launch -d "$DEVICE" com.dvanders.heinetwork | tail -1
+ares-package --no-minify -o build app
+ares-install -d "$DEVICE" "build/com.dvanders.heinetwork_${V}_all.ipk"
+[ "$1" = "--no-launch" ] || ares-launch -d "$DEVICE" com.dvanders.heinetwork

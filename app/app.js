@@ -12,7 +12,7 @@ const $ = (s, r = document) => r.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const decoder = document.createElement('textarea');
 const txt = s => { decoder.innerHTML = s == null ? '' : String(s); return decoder.value; };
-const esc = s => txt(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const esc = s => txt(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clean = p => String(p || '').replace(/^\/+|\/+$/g, '');
 
 function secs(d) {            // API gives "418" or "14:55" or "1:02:03"
@@ -39,6 +39,7 @@ async function api(path, { method = 'GET', body, ns = NS, anon = false } = {}) {
   let data = null;
   try { data = await r.json(); } catch (e) { /* non-JSON error page */ }
   if (!r.ok) { const err = new Error((data && (data.message || data.error)) || `HTTP ${r.status}`); err.status = r.status; err.data = data; throw err; }
+  if (data == null && method === 'GET') throw new Error('Empty response from the server');
   return data;
 }
 function findToken(o, depth = 0) {      // activation result shape is not documented; look for a token-ish field
@@ -81,18 +82,24 @@ function push(build) {
   $('#stack').appendChild(s.el); stack.push(s);
   s.el.appendChild(el('div', 'spinner'));
   Promise.resolve(build(s)).then(() => { const sp = $('.spinner', s.el); if (sp) sp.remove(); if (topScreen() === s) focusFirst(s); })
-    .catch(e => { s.el.innerHTML = ''; s.el.appendChild(el('div', 'center', `<h1>Something went wrong</h1><p>${esc(e.message)}</p><p class="muted">Press BACK</p>`)); console.error(e); });
+    .catch(e => {
+      console.error(e); if (s.closed) return;
+      const box = el('div', 'center', `<h1>Something went wrong</h1><p>${esc(e.message)}</p>`);
+      if (stack.length === 1) { const b = focusable(el('div', 'btn', 'Try again'), reset); b.dataset.autofocus = '1'; box.appendChild(b); }
+      else box.appendChild(el('p', 'muted', 'Press BACK'));
+      s.el.innerHTML = ''; s.el.appendChild(box); if (topScreen() === s) focusFirst(s);
+    });
   return s;
 }
 function pop() {
   if (stack.length <= 1) return false;
-  const s = stack.pop(); if (s.cleanup) s.cleanup(); s.el.remove();
+  const s = stack.pop(); s.closed = true; if (s.cleanup) s.cleanup(); s.el.remove();
   const p = topScreen(); p.el.hidden = false;
   if (p.last && p.last.isConnected) focus(p.last); else focusFirst(p);
   refreshHome();
   return true;
 }
-function reset() { while (stack.length) { const s = stack.pop(); if (s.cleanup) s.cleanup(); s.el.remove(); } push(homeScreen); }
+function reset() { while (stack.length) { const s = stack.pop(); s.closed = true; if (s.cleanup) s.cleanup(); s.el.remove(); } push(homeScreen); }
 function focus(e, smooth = true) {
   if (!e) return;
   e.focus({ preventScroll: true });
@@ -138,7 +145,7 @@ function episodeCard(ep, prog = {}) {
 function categoryCard(cat) {
   const c = el('div', 'card');
   c.innerHTML = `<div class="thumb" style="background-image:url('${esc(cat.image_url || cat.image || '')}')"></div>
-    <div class="t">${esc(cat.name || cat.title)}</div>${cat.episode_count ? `<div class="m">${cat.episode_count} episodes</div>` : ''}`;
+    <div class="t">${esc(cat.name || cat.title)}</div>${+cat.episode_count ? `<div class="m">${+cat.episode_count} episodes</div>` : ''}`;
   return focusable(c, () => push(s => categoryScreen(s, cat.path)));
 }
 function row(title, cards, { grid = false, sub = '' } = {}) {
@@ -162,7 +169,11 @@ async function refreshHome() {          // rebuild the home screen in place once
   focusFirst(s);
 }
 async function homeScreen(s) {
-  const [home, nav, prog] = await Promise.all([api('home'), api('navigation').catch(() => ({ main: [] })), savedProgress()]);
+  const homeApi = () => api('home').catch(e => {
+    if (!auth.token || (e.status !== 401 && e.status !== 403)) throw e;
+    auth.token = ''; toast('Session expired. Please sign in again.', 6000); return api('home');
+  });
+  const [home, nav, prog] = await Promise.all([homeApi(), api('navigation').catch(() => ({ main: [] })), savedProgress()]);
   s.isHome = true;
   const navEl = el('div', 'nav'); navEl.appendChild(el('div', 'brand', 'HEI NETWORK <small>unofficial</small>'));
   (nav.main || []).forEach(n => navEl.appendChild(focusable(el('div', 'tab', esc(n.label)), () => push(sc => categoryScreen(sc, n.path)))));
@@ -171,7 +182,7 @@ async function homeScreen(s) {
 
   const h = home.hero;
   if (h && h.content) {
-    const hero = el('div', 'hero'); hero.style.backgroundImage = `url('${h.image}')`;
+    const hero = el('div', 'hero'); hero.style.backgroundImage = `url("${String(h.image || '').replace(/["\\\n]/g, '')}")`;
     const body = el('div', 'hero-body', `<div class="eyebrow">${esc(h.content.eyebrow || '')}</div><h1>${esc(h.content.title || '')}</h1>`);
     const b = focusable(el('div', 'btn', '▶  ' + esc(h.content.link_text || 'Watch')), () => openEpisode(h.content.path));
     b.dataset.autofocus = '1'; body.appendChild(b); hero.appendChild(body); s.el.appendChild(hero);
@@ -183,7 +194,8 @@ async function homeScreen(s) {
 
 async function categoryScreen(s, path) {
   const [c, prog] = await Promise.all([api(clean(path)), savedProgress()]);
-  if (c.type === 'episode') { pop(); return openEpisode(path); }
+  if (s.closed) return;                    // BACK was pressed while this was loading
+  if (c.type === 'episode') { if (topScreen() === s) { pop(); return openEpisode(path); } return; }
   s.el.appendChild(el('div', 'header', `${c.parent ? `<div class="eyebrow">${esc(c.parent.name)}</div>` : ''}<h1>${esc(c.name)}</h1>`));
   if ((c.categories || []).length) s.el.appendChild(row('', c.categories.map(categoryCard), { grid: true }));
   if ((c.episodes || []).length) s.el.appendChild(row((c.categories || []).length ? 'Episodes' : '', c.episodes.map(e => episodeCard(e, prog)), { grid: true }));
@@ -192,18 +204,26 @@ async function categoryScreen(s, path) {
 
 async function loginScreen(s) {
   const g = await api('activation/generate-code', { anon: true });
+  if (s.closed) return;
   const short = String(g.activate || 'https://www.heinetwork.tv/activate').replace(/^https?:\/\/(www\.)?/, '').split('?')[0];
   const box = el('div', 'center login');
-  box.innerHTML = `<img src="${g.qr_base64 || ''}" alt=""><div class="col"><h1>Sign in to HEI Network</h1>
+  box.innerHTML = `<img alt=""><div class="col"><h1>Sign in to HEI Network</h1>
     <p>Scan the code with your phone, or go to <b>${esc(short)}</b> and enter:</p><div class="code">${esc(g.code)}</div>
     <p class="muted" id="login-status">Waiting for you to confirm…</p></div>`;
+  if (/^data:image\//.test(g.qr_base64 || '')) $('img', box).src = g.qr_base64;
   s.el.appendChild(box);
-  let stopped = false; s.cleanup = () => { stopped = true; };
-  const started = Date.now();
+  const started = Date.now(); let fails = 0;
   (async function poll() {
-    while (!stopped && Date.now() - started < 19 * 60000) {
-      await new Promise(r => setTimeout(r, 3500)); if (stopped) return;
-      let p; try { p = await api('activation/poll?code=' + encodeURIComponent(g.code), { anon: true }); } catch (e) { p = e.data || { status: 'error:' + e.message }; }
+    while (!s.closed && Date.now() - started < 19 * 60000) {
+      await new Promise(r => setTimeout(r, 3500)); if (s.closed) return;
+      let p;
+      try { p = await api('activation/poll?code=' + encodeURIComponent(g.code), { anon: true }); fails = 0; }
+      catch (e) {
+        // A network blip or a server hiccup is not an answer: keep waiting, give up only if it persists.
+        if (!e.data && (!e.status || e.status >= 500) && ++fails < 6) continue;
+        p = e.data || { status: 'error: ' + e.message };
+      }
+      if (s.closed) return;
       if (p && p.status === 'pending') continue;
       const token = findToken(p);
       // Shape log (field names only, never values) so an unexpected response can be diagnosed.
@@ -212,7 +232,7 @@ async function loginScreen(s) {
       const st = $('#login-status', s.el); if (st) st.textContent = 'Activation did not complete (' + ((p && (p.status || p.error)) || 'unknown') + '). Press BACK and try again.';
       return;
     }
-    const st = $('#login-status', s.el); if (st && !stopped) st.textContent = 'Code expired. Press BACK and try again.';
+    const st = $('#login-status', s.el); if (st && !s.closed) st.textContent = 'Code expired. Press BACK and try again.';
   })();
 }
 
@@ -226,14 +246,16 @@ async function accountScreen(s) {
 }
 
 /* ---------- playback ---------- */
-const P = { el: null, v: null, ep: null, osdTimer: 0, progTimer: 0, seekTarget: null, seekTimer: 0, nextTimer: 0, open: false };
+const P = { el: null, v: null, ep: null, osdTimer: 0, progTimer: 0, seekTarget: null, seekTimer: 0, nextTimer: 0, open: false, req: 0, finished: false, next: null };
 
 async function openEpisode(path, { fromStart = false } = {}) {
   if (!path) return;
   if (!auth.token) { toast('Sign in to watch'); return push(loginScreen); }
   $('#spinner').hidden = false; $('#player').hidden = false; P.open = true; $('#p-title').textContent = ''; $('#p-eyebrow').textContent = '';
+  const req = ++P.req;                        // closing the player or opening another episode outdates this load
   try {
     const [ep, prog] = await Promise.all([api(clean(path)), fromStart ? {} : savedProgress()]);
+    if (req !== P.req) return;
     const url = findStream(ep.playback_url);
     if (!url) {
       const pu = ep.playback_url || {}; const why = (pu.data && pu.data.error) || pu.error || 'This episode is not available on your account.';
@@ -244,20 +266,21 @@ async function openEpisode(path, { fromStart = false } = {}) {
     const saved = prog[String(ep.id)];
     const resume = saved ? saved.pos : 0;
     play({ url, title: txt(ep.title), eyebrow: [ep.parent_category && ep.parent_category.name, ep.category && ep.category.name].filter(Boolean).map(txt).join(' · '), ep, startAt: resume });
-  } catch (e) { closePlayer(); toast('Could not load episode: ' + e.message, 6000); }
+  } catch (e) { if (req !== P.req) return; closePlayer(); toast('Could not load episode: ' + e.message, 6000); }
 }
 
 function play({ url, title, eyebrow = '', ep = null, startAt = 0 }) {
-  const v = P.v; P.ep = ep; P.open = true; P.seekTarget = null; P.dirty = false;
+  const v = P.v; P.ep = ep; P.open = true; P.seekTarget = null; P.dirty = false; P.finished = false; P.next = null;
   $('#player').hidden = false; $('#upnext').hidden = true; $('#spinner').hidden = false;
   $('#p-title').textContent = title; $('#p-eyebrow').textContent = eyebrow;
   v.src = url;
-  v.addEventListener('loadedmetadata', () => {
+  v.onloadedmetadata = () => {              // a property, so a handler left over from an earlier episode is replaced
+    v.onloadedmetadata = null;
     if (startAt > 10 && !(startAt > v.duration - 20)) { v.currentTime = startAt; toast('Resuming from ' + clock(startAt), 4000); }
-  }, { once: true });
+  };
   v.play().catch(e => console.warn('[hei] play() rejected', e && e.message));
   showOSD();
-  clearInterval(P.progTimer); P.progTimer = setInterval(() => report(false), 20000);
+  clearInterval(P.progTimer); P.progTimer = setInterval(() => { if (!v.paused) report(false); }, 20000);
 }
 function nextEpisode() {
   const ep = P.ep; if (!ep || !ep.playlist_episodes) return null;
@@ -267,6 +290,7 @@ function nextEpisode() {
 function report(finished) {
   const v = P.v, ep = P.ep; if (!ep || !auth.token || !v.duration || !isFinite(v.duration)) return Promise.resolve();
   if (!finished && v.currentTime < 15) return Promise.resolve();   // too early to be a meaningful position
+  if (!finished && P.finished) return Promise.resolve();           // already reported as watched; don't undo that
   P.dirty = true;
   return api('progress', { ns: 'video-progress/v1', method: 'POST', body: { episode_id: +ep.id, content_url: ep.content_url, position_seconds: Math.floor(v.currentTime), duration_seconds: Math.floor(v.duration), finished: !!finished } })
     .catch(e => console.warn('[hei] progress not saved:', e.message));
@@ -276,6 +300,7 @@ function closePlayer() {
   const wasDirty = () => P.dirty;
   Promise.resolve(saving).then(() => { if (wasDirty()) { homeStale = true; refreshHome(); } });
   clearInterval(P.progTimer); clearTimeout(P.nextTimer); clearTimeout(P.seekTimer);
+  P.req++; P.next = null; P.v.onloadedmetadata = null;
   P.v.pause(); P.v.removeAttribute('src'); P.v.load();
   P.open = false; P.ep = null; $('#player').hidden = true; $('#spinner').hidden = true; $('#upnext').hidden = true;
 }
@@ -290,7 +315,7 @@ function paint() {
   $('#p-cur').textContent = clock(t); $('#p-dur').textContent = d ? clock(d) : '';
   $('#p-state').textContent = P.seekTarget != null ? (P.seekTarget > v.currentTime ? '▶▶ ' : '◀◀ ') + clock(P.seekTarget) : v.paused ? 'Paused' : '';
 }
-function toggle() { const v = P.v; if (v.paused) v.play(); else v.pause(); showOSD(v.paused); paint(); }
+function toggle() { const v = P.v; if (v.paused) v.play().catch(() => {}); else v.pause(); showOSD(v.paused); paint(); }
 function seek(delta, repeat) {          // seeks are batched: hold a direction, the jump lands when you let go
   const v = P.v; if (!v.duration) return;
   const step = repeat ? delta * 2 : delta;
@@ -299,10 +324,14 @@ function seek(delta, repeat) {          // seeks are batched: hold a direction, 
   clearTimeout(P.seekTimer); P.seekTimer = setTimeout(() => { v.currentTime = P.seekTarget; P.seekTarget = null; showOSD(); }, 450);
 }
 function playerKey(e) {
-  if (!$('#upnext').hidden && (e.keyCode === KEY.BACK || e.keyCode === KEY.ESC)) { clearTimeout(P.nextTimer); return closePlayer(); }
+  if (!$('#upnext').hidden) {               // "up next" countdown: OK starts it now, BACK stops, other keys do nothing
+    if ([KEY.BACK, KEY.ESC, KEY.BKSP, KEY.STOP].includes(e.keyCode)) closePlayer();
+    else if ((e.keyCode === KEY.OK || e.keyCode === KEY.PLAY) && !e.repeat) startNext();
+    return e.preventDefault();
+  }
   switch (e.keyCode) {
     case KEY.OK: toggle(); break;
-    case KEY.PLAY: P.v.play(); showOSD(); break;
+    case KEY.PLAY: P.v.play().catch(() => {}); showOSD(); break;
     case KEY.PAUSE: P.v.pause(); showOSD(true); break;
     case KEY.LEFT: seek(-10, e.repeat); break;
     case KEY.RIGHT: seek(10, e.repeat); break;
@@ -314,6 +343,7 @@ function playerKey(e) {
   }
   e.preventDefault();
 }
+function startNext() { const n = P.next; clearTimeout(P.nextTimer); $('#upnext').hidden = true; P.next = null; if (n) openEpisode(n.path, { fromStart: true }); }
 function initPlayer() {
   const v = P.v = $('#video'); P.el = $('#player');
   ['timeupdate', 'progress', 'durationchange', 'pause', 'play', 'seeked'].forEach(n => v.addEventListener(n, paint));
@@ -322,12 +352,14 @@ function initPlayer() {
   v.addEventListener('pause', () => { if (P.open && v.currentTime > 0) report(false); });
   v.addEventListener('error', () => { if (!P.open) return; const c = v.error && v.error.code; closePlayer(); toast('Playback error' + (c ? ' (' + c + ')' : ''), 6000); });
   v.addEventListener('ended', () => {
-    report(true);
+    if (!P.open) return;
+    report(true); P.finished = true;
     const n = nextEpisode(); if (!n) return closePlayer();
-    const u = $('#upnext'); u.innerHTML = `<b>Up next in 8s · BACK to stop</b>${esc(n.title)}`; u.hidden = false; showOSD(true);
-    P.nextTimer = setTimeout(() => { u.hidden = true; openEpisode(n.path, { fromStart: true }); }, 8000);
+    P.next = n;
+    const u = $('#upnext'); u.innerHTML = `<b>Up next in 8s · OK to play now · BACK to stop</b>${esc(n.title)}`; u.hidden = false; showOSD(true);
+    clearTimeout(P.nextTimer); P.nextTimer = setTimeout(startNext, 8000);
   });
-  $('#player').addEventListener('click', () => { if (P.open) toggle(); });
+  $('#player').addEventListener('click', () => { if (P.open && $('#upnext').hidden) toggle(); });
   $('#player').addEventListener('mousemove', () => { if (P.open) showOSD(); });
 }
 
